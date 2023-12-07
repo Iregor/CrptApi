@@ -20,7 +20,7 @@ import java.util.Base64;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
-public class CrptApi {
+public class CrptApiBlockingQueue {
     private final int requestLimit;
     private final TimeUnit lifeCycle;
     private final ArrayBlockingQueue<LocalDateTime> requestQueue;
@@ -29,7 +29,7 @@ public class CrptApi {
     private final Base64.Encoder base64Encoder;
     private final HttpClient client;
 
-    public CrptApi(TimeUnit lifeCycle, int requestLimit) {
+    public CrptApiBlockingQueue(TimeUnit lifeCycle, int requestLimit) {
         this.lifeCycle = lifeCycle;
         this.requestLimit = requestLimit;
         mapper = new ObjectMapper();
