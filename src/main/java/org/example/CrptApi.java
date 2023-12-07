@@ -1,6 +1,5 @@
 package org.example;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.ObjectWriter;
 import lombok.AllArgsConstructor;
@@ -20,52 +19,50 @@ import java.util.Base64;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
-public class CrptApiBlockingQueue {
+public class CrptApi {
     private final int requestLimit;
-    private final TimeUnit lifeCycle;
+    private final TimeUnit countCycle;
     private final ArrayBlockingQueue<LocalDateTime> requestQueue;
-    private final ObjectMapper mapper;
-    private final String HOST = "https://ismp.crpt.ru";
+    private final ObjectMapper mapper;  //better to inject via DI-framework in real scenarios
+    private final String HOST = "https://ismp.crpt.ru"; //better not to hard code in real scenarios
     private final Base64.Encoder base64Encoder;
     private final HttpClient client;
 
-    public CrptApiBlockingQueue(TimeUnit lifeCycle, int requestLimit) {
-        this.lifeCycle = lifeCycle;
+
+    public CrptApi(TimeUnit countCycle, int requestLimit) {
+        this.countCycle = countCycle;
         this.requestLimit = requestLimit;
         mapper = new ObjectMapper();
         base64Encoder = Base64.getEncoder();
-        requestQueue = new ArrayBlockingQueue<>(requestLimit);
         client = HttpClient.newHttpClient();
-        QueueConsumer consumer = new QueueConsumer();
-        Thread consumerThread = new Thread(consumer::consumeQueue);
-        consumerThread.start();
+        requestQueue = new ArrayBlockingQueue<>(requestLimit);
+        createQueueConsumer();
     }
 
     public String createProducedProductDocument(Object productDocument,
-                                              String signature,
-                                              ProductGroup productGroup,
-                                              DocumentFormat documentFormat,
-                                              String token) throws InterruptedException, IOException {
+                                                String signature,
+                                                ProductGroup productGroup,
+                                                DocumentFormat documentFormat,
+                                                String token) throws InterruptedException, IOException {
+        // exceptions are thrown to API callers to inform about troubles
         validateProducedProductDocumentData(productDocument, signature, productGroup, documentFormat, token);
-        putRequestTimeInQueue();
+        registerRequestInQueue();
         return sendProducedProductDocumentRequest(documentFormat, productDocument, productGroup, signature, token);
     }
 
-    private void putRequestTimeInQueue() throws InterruptedException {
-        try {
-            //we have blocking here if queue is full
-            //wait for QueueConsumer to free some space
-            requestQueue.put(LocalDateTime.now());
-        } catch (InterruptedException exc) {
-            throw new InterruptedException("Thread was interrupted while waiting for vacant queue place.");
-        }
+    public int getRequestLimit() {
+        return requestLimit;
+    }
+
+    public TimeUnit getCountCycle() {
+        return countCycle;
     }
 
     private String sendProducedProductDocumentRequest(DocumentFormat documentFormat,
-                                                    Object productDocument,
-                                                    ProductGroup productGroup,
-                                                    String signature,
-                                                    String token) throws InterruptedException, IOException {
+                                                      Object productDocument,
+                                                      ProductGroup productGroup,
+                                                      String signature,
+                                                      String token) throws InterruptedException, IOException {
         String path = "/api/v3/lk/documents/commissioning/contract/create";
         String requestBody = getProducedProductDocumentRequestBody(documentFormat, productDocument, productGroup, signature);
         try {
@@ -74,7 +71,6 @@ public class CrptApiBlockingQueue {
             throw new InterruptedException("Thread was interrupted while waiting server response.");
         }
     }
-
 
     private String sendRequest(String path, String token, String requestBody) throws InterruptedException, IOException {
         String uri = HOST + path;
@@ -88,12 +84,12 @@ public class CrptApiBlockingQueue {
         return parseHttpResponse(response);
     }
 
-    private String parseHttpResponse(HttpResponse<String> response) throws JsonProcessingException {
+    private String parseHttpResponse(HttpResponse<String> response) throws IOException {
         int statusCode = response.statusCode();
         if (statusCode / 100 == 2) {
             return mapper.reader().readTree(response.body()).get("value").asText();
         } else {
-            throw new RuntimeException(String.format("Response code not 2XX. Actual: %d.", statusCode));
+            throw new IOException(String.format("Response code not 2XX. Actual: %d.", statusCode));
         }
     }
 
@@ -154,39 +150,6 @@ public class CrptApiBlockingQueue {
         }
     }
 
-    private class QueueConsumer {
-        //class to consume request queue according to specified time unit
-        private void consumeQueue() {
-            while (!Thread.interrupted()) {
-                LocalDateTime instantToConsume = requestQueue.peek();
-                if (instantToConsume == null) {
-                    //queue is empty, guarantee nothing to consume at least lifeCycle
-                    try {
-                        Thread.sleep(lifeCycle.toMillis(1));
-                    } catch (InterruptedException exc) {
-                        Thread.currentThread().interrupt();
-                    }
-                    continue;
-                }
-
-                LocalDateTime consumeBefore = LocalDateTime.now().minusNanos(lifeCycle.toNanos(1));
-                if (instantToConsume.isBefore(consumeBefore)) {
-                    //request is ready to consume, lets poll it
-                    requestQueue.poll();
-                } else {
-                    Duration waitForConsuming = Duration.between(consumeBefore, instantToConsume);
-                    try {
-                        //wait exactly as needed to consume the closest request
-                        Thread.sleep(waitForConsuming.toMillis() + 1);
-                    } catch (InterruptedException exc) {
-                        Thread.currentThread().interrupt();
-                    }
-                }
-            }
-            System.out.println("Consumer was interrupted and terminated.");
-        }
-    }
-
     @Getter
     @Setter
     @AllArgsConstructor
@@ -199,13 +162,13 @@ public class CrptApiBlockingQueue {
         private String type;
     }
 
-    private enum DocumentFormat {
+    public enum DocumentFormat {
         MANUAL,
         XML,
         CSV
     }
 
-    private enum ProductGroup {
+    public enum ProductGroup {
         clothes,
         shoes,
         tobacco,
@@ -222,5 +185,54 @@ public class CrptApiBlockingQueue {
         LP_INTRODUCE_GOODS,
         LP_INTRODUCE_GOODS_CSV,
         LP_INTRODUCE_GOODS_XML
+    }
+
+    private void registerRequestInQueue() throws InterruptedException {
+        try {
+            //we have blocking here if queue is full
+            //wait for QueueConsumer to free some space
+            requestQueue.put(LocalDateTime.now());
+        } catch (InterruptedException exc) {
+            throw new InterruptedException("Thread was interrupted while waiting for vacant queue place.");
+        }
+    }
+
+    private void createQueueConsumer() {
+        QueueConsumer consumer = new QueueConsumer();
+        Thread consumerThread = new Thread(consumer::consumeQueue);
+        consumerThread.start();
+    }
+
+    private class QueueConsumer {
+        //class to consume request queue according to specified time unit
+        private void consumeQueue() {
+            while (!Thread.interrupted()) {
+                LocalDateTime instantToConsume = requestQueue.peek();
+                if (instantToConsume == null) {
+                    //queue is empty, guarantee nothing to consume at least lifeCycle
+                    try {
+                        Thread.sleep(countCycle.toMillis(1));
+                    } catch (InterruptedException exc) {
+                        Thread.currentThread().interrupt();
+                    }
+                    continue;
+                }
+
+                LocalDateTime consumeBefore = LocalDateTime.now().minusNanos(countCycle.toNanos(1));
+                if (instantToConsume.isBefore(consumeBefore)) {
+                    //request is ready to consume, lets poll it
+                    requestQueue.poll();
+                } else {
+                    Duration waitForConsuming = Duration.between(consumeBefore, instantToConsume);
+                    try {
+                        //wait exactly as needed to consume the closest request
+                        Thread.sleep(waitForConsuming.toMillis() + 1);
+                    } catch (InterruptedException exc) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+            }
+            System.out.println("Consumer was interrupted and terminated.");
+        }
     }
 }

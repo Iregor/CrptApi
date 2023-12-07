@@ -19,12 +19,12 @@ import java.time.LocalDateTime;
 import java.util.Base64;
 import java.util.concurrent.TimeUnit;
 
-public class CrptApiCounter {
+public class CrptApiCounter_Deprecated {
     private final int requestLimit;
 
     private final TimeUnit countCycle;
     private final ObjectMapper mapper;
-    private final String HOST = "https://ismp.crpt.ru";
+    private final String HOST = "http://localhost";
     private final Base64.Encoder base64Encoder;
     private final HttpClient client;
     private LocalDateTime countBeginsTime;
@@ -32,7 +32,7 @@ public class CrptApiCounter {
     private int counter;
 
 
-    public CrptApiCounter(TimeUnit countCycle, int requestLimit) {
+    public CrptApiCounter_Deprecated(TimeUnit countCycle, int requestLimit) {
         this.countCycle = countCycle;
         this.requestLimit = requestLimit;
         mapper = new ObjectMapper();
@@ -193,13 +193,13 @@ public class CrptApiCounter {
         private String type;
     }
 
-    private enum DocumentFormat {
+    public enum DocumentFormat {
         MANUAL,
         XML,
         CSV
     }
 
-    private enum ProductGroup {
+    public enum ProductGroup {
         clothes,
         shoes,
         tobacco,
@@ -217,7 +217,8 @@ public class CrptApiCounter {
         LP_INTRODUCE_GOODS_CSV,
         LP_INTRODUCE_GOODS_XML
     }
-
+    //Below are blocking queue request limiting realization
+    //OK just to ignore that
     /*    private void putRequestTimeInQueue() throws InterruptedException {
         try {
             //we have blocking here if queue is full

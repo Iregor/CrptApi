@@ -1,26 +1,43 @@
 package org.example;
 
+import lombok.AllArgsConstructor;
+import lombok.Getter;
+import lombok.Setter;
+
 import java.util.Scanner;
 import java.util.concurrent.TimeUnit;
 
-/**
- * Hello world!
- */
 public class App {
     public static void main(String[] args) throws Exception {
-        //piece of code to test in the intermediate stage
-        System.out.println("Hello from main.");
-//        CrptApi crptApi = new CrptApi(TimeUnit.MINUTES, 5);
+        System.out.println("Program started.");
         Scanner scanner = new Scanner(System.in);
+        Document doc = new Document(0, "document", "very useful document");
+        CrptApi crptApi = new CrptApi(TimeUnit.MINUTES, 5);
         int command;
+        int count = 0;
         while ((command = scanner.nextInt()) != 2) {
-            System.out.println("command id: " + command);
             if (command == 1) {
-//                crptApi.createDocumentForProducedProduct();
+                count++;
+                doc.setId(count);
+                String response = crptApi.createProducedProductDocument(doc,
+                        "signature",
+                        CrptApi.ProductGroup.bicycle,
+                        CrptApi.DocumentFormat.MANUAL,
+                        "very simple token");
+                System.out.println(response);
             } else {
                 System.out.println("Wrong command");
             }
         }
-        System.out.println("Thanks for using app.");
+        System.out.println("Program finished.");
+    }
+
+    @AllArgsConstructor
+    @Setter
+    @Getter
+    private static class Document {
+        private long id;
+        private String name;
+        private String description;
     }
 }
