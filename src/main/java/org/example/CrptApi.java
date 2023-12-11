@@ -28,14 +28,13 @@ public class CrptApi {
     private final Base64.Encoder base64Encoder;
     private final HttpClient client;
 
-
     public CrptApi(TimeUnit countCycle, int requestLimit) {
         this.countCycle = countCycle;
         this.requestLimit = requestLimit;
         mapper = new ObjectMapper();
         base64Encoder = Base64.getEncoder();
         client = HttpClient.newHttpClient();
-        requestQueue = new ArrayBlockingQueue<>(requestLimit);
+        requestQueue = new ArrayBlockingQueue<>(requestLimit, true);
         createQueueConsumer();
     }
 
@@ -50,19 +49,12 @@ public class CrptApi {
         return sendProducedProductDocumentRequest(documentFormat, productDocument, productGroup, signature, token);
     }
 
-    public int getRequestLimit() {
-        return requestLimit;
-    }
-
-    public TimeUnit getCountCycle() {
-        return countCycle;
-    }
-
     private String sendProducedProductDocumentRequest(DocumentFormat documentFormat,
                                                       Object productDocument,
                                                       ProductGroup productGroup,
                                                       String signature,
                                                       String token) throws InterruptedException, IOException {
+        //path based on para 2.1.7 "Единый метод создания документов" of Opisanie-API-GIS-MP.pdf
         String path = "/api/v3/lk/documents/commissioning/contract/create";
         String requestBody = getProducedProductDocumentRequestBody(documentFormat, productDocument, productGroup, signature);
         try {
@@ -89,7 +81,7 @@ public class CrptApi {
         if (statusCode / 100 == 2) {
             return mapper.reader().readTree(response.body()).get("value").asText();
         } else {
-            throw new IOException(String.format("Response code not 2XX. Actual: %d.", statusCode));
+            throw new IOException(String.format("Response code is not 2XX. Actual: %d.", statusCode));
         }
     }
 
@@ -97,6 +89,8 @@ public class CrptApi {
                                                          Object productDocument,
                                                          ProductGroup productGroup,
                                                          String signature) throws IOException {
+        //request body based on para 2.1.7 "Единый метод создания документов" of Opisanie-API-GIS-MP.pdf
+        //Object productDocument is an object of document to transfer with valid getters to be json-serialized
         String productDocumentBase64 = parseDocumentToBase64(documentFormat, productDocument);
         String signatureBase64 = base64Encoder.encodeToString(signature.getBytes(StandardCharsets.UTF_8));
         String documentType = getDocumentType(documentFormat).name();
@@ -146,7 +140,56 @@ public class CrptApi {
 
     private void validateProducedProductDocumentData(Object productDocument, String signature, ProductGroup productGroup, DocumentFormat documentFormat, String token) {
         if (productDocument == null || signature == null || productGroup == null || documentFormat == null || token == null) {
-            throw new RuntimeException("Produced product document creating: null arguments are not allowed.");
+            throw new IllegalArgumentException("Produced product document creating: null arguments are not allowed.");
+        }
+    }
+
+    private void registerRequestInQueue() throws InterruptedException {
+        try {
+            //we have blocking here if queue is full
+            //wait for QueueConsumer to free some space
+            requestQueue.put(LocalDateTime.now());
+        } catch (InterruptedException exc) {
+            throw new InterruptedException("Thread was interrupted while waiting for vacant queue place.");
+        }
+    }
+
+    private void createQueueConsumer() {
+        QueueConsumer consumer = new QueueConsumer();
+        Thread consumerThread = new Thread(consumer::consumeQueue);
+        consumerThread.setDaemon(true);
+        consumerThread.start();
+    }
+
+    private class QueueConsumer {
+        //class to consume request queue according to specified time unit
+        private void consumeQueue() {
+            while (!Thread.interrupted()) {
+                LocalDateTime instantToConsume = requestQueue.peek();
+                if (instantToConsume == null) {
+                    //queue is empty, it is guaranteed nothing to consume at least lifeCycle
+                    try {
+                        Thread.sleep(countCycle.toMillis(1));
+                    } catch (InterruptedException exc) {
+                        Thread.currentThread().interrupt();
+                    }
+                    continue;
+                }
+                LocalDateTime consumeBefore = LocalDateTime.now().minusNanos(countCycle.toNanos(1));
+                if (instantToConsume.isBefore(consumeBefore)) {
+                    //request is ready to consume, lets poll it
+                    requestQueue.poll();
+                } else {
+                    Duration waitForConsuming = Duration.between(consumeBefore, instantToConsume);
+                    try {
+                        //wait exactly as needed to consume the closest request
+                        Thread.sleep(waitForConsuming.toMillis() + 1);
+                    } catch (InterruptedException exc) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+            }
+            System.out.println("Consumer was interrupted and terminated.");
         }
     }
 
@@ -185,54 +228,5 @@ public class CrptApi {
         LP_INTRODUCE_GOODS,
         LP_INTRODUCE_GOODS_CSV,
         LP_INTRODUCE_GOODS_XML
-    }
-
-    private void registerRequestInQueue() throws InterruptedException {
-        try {
-            //we have blocking here if queue is full
-            //wait for QueueConsumer to free some space
-            requestQueue.put(LocalDateTime.now());
-        } catch (InterruptedException exc) {
-            throw new InterruptedException("Thread was interrupted while waiting for vacant queue place.");
-        }
-    }
-
-    private void createQueueConsumer() {
-        QueueConsumer consumer = new QueueConsumer();
-        Thread consumerThread = new Thread(consumer::consumeQueue);
-        consumerThread.start();
-    }
-
-    private class QueueConsumer {
-        //class to consume request queue according to specified time unit
-        private void consumeQueue() {
-            while (!Thread.interrupted()) {
-                LocalDateTime instantToConsume = requestQueue.peek();
-                if (instantToConsume == null) {
-                    //queue is empty, guarantee nothing to consume at least lifeCycle
-                    try {
-                        Thread.sleep(countCycle.toMillis(1));
-                    } catch (InterruptedException exc) {
-                        Thread.currentThread().interrupt();
-                    }
-                    continue;
-                }
-
-                LocalDateTime consumeBefore = LocalDateTime.now().minusNanos(countCycle.toNanos(1));
-                if (instantToConsume.isBefore(consumeBefore)) {
-                    //request is ready to consume, lets poll it
-                    requestQueue.poll();
-                } else {
-                    Duration waitForConsuming = Duration.between(consumeBefore, instantToConsume);
-                    try {
-                        //wait exactly as needed to consume the closest request
-                        Thread.sleep(waitForConsuming.toMillis() + 1);
-                    } catch (InterruptedException exc) {
-                        Thread.currentThread().interrupt();
-                    }
-                }
-            }
-            System.out.println("Consumer was interrupted and terminated.");
-        }
     }
 }
